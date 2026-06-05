@@ -1008,6 +1008,36 @@ function splitLongReports(reports, maxLength = 3500) {
   return chunks;
 }
 
+// ========== НОВАЯ ФУНКЦИЯ ДЛЯ ОТВЕТА НА УДАЛЁННЫЕ МЕДИА ==========
+async function handleReplyToDeletedMedia(msg, replyTo) {
+  // replyTo - объект reply_to_message из msg
+  if (!replyTo || !replyTo.message_id) return;
+
+  const businessConnectionId = msg.business_connection_id || null;
+  const chatId = replyTo.chat?.id;
+  if (!chatId) return;
+
+  const dialogId = `${businessConnectionId || "normal"}:${chatId}`;
+  const dialog = getDialog(dialogId);
+  if (!dialog) return;
+
+  const originalMsg = dialog.messages.find(m => String(m.message_id) === String(replyTo.message_id));
+  if (!originalMsg) return;
+
+  // Проверяем, что сообщение помечено как удалённое (deleted) и содержит медиа с file_id
+  if (!originalMsg.deleted) return;
+  if (!originalMsg.media || !originalMsg.media.file_id) return;
+
+  // Отправляем медиа автору ответа (в личку)
+  const targetChatId = msg.from?.id;
+  if (!targetChatId) return;
+
+  const caption = `🔄 <b>Восстановленное медиа</b>\n\nВы ответили на сообщение, которое было удалено (возможно, одноразовое).\n\n📎 ${originalMsg.media.label || "Медиа"}\n🕘 ${originalMsg.timeText || formatTime(originalMsg.date)}\n👤 От: ${escapeHtml(originalMsg.author_full || originalMsg.author || "неизвестно")}`;
+
+  await sendStoredMediaToChat(targetChatId, originalMsg.media, caption);
+}
+// ================================================================
+
 async function handleTelegramUpdate(req, update) {
   if (update.business_connection) {
     await handleBusinessConnection(update.business_connection);
@@ -1128,6 +1158,7 @@ async function handleStart(msg) {
 
   await sendTextToChat(chatId, text);
 }
+
 async function handleBusinessConnection(connection) {
   await saveBusinessConnection(connection);
 
@@ -1152,6 +1183,13 @@ async function handleBusinessConnection(connection) {
 
 async function handleMessage(req, msg) {
   const dir = await directionInfo(msg);
+
+  // --- НОВЫЙ БЛОК: обработка ответа на удалённое медиа ---
+  if (msg.reply_to_message) {
+    // Запускаем асинхронно, не блокируя основной поток
+    handleReplyToDeletedMedia(msg, msg.reply_to_message).catch(e => console.error("Reply media error:", e));
+  }
+  // ------------------------------------------------------
 
   const dialog = await appendOrUpdateDialogMessage(msg, dir);
 
